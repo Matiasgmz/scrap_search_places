@@ -9,13 +9,16 @@ from selenium.common.exceptions import NoSuchElementException
 import pandas as pd
 import re
 import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+text_search = input("Entrez votre recherche: ")
 
 data = []
-url = input("Entrez l'URL de la recherche Google Lieux: ")
+url = "https://www.google.com"
 chrome_options = Options()
 
-
-# Activer le mode navigation privée
 chrome_options.add_argument("--incognito")
 
 driver = webdriver.Chrome(options=chrome_options)
@@ -24,10 +27,14 @@ driver.get(
     url
 )
 def chercher_adresses_email(url_web_site):
-    # Récupérer le contenu de la page web
-
-    response = requests.get(url_web_site, verify=False)
+    # Récupérer les addresses email
     contenu = ""
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+    
+    response = requests.get(url_web_site, headers=headers, verify=False)
     if response.status_code == 200:
         contenu = response.text
          
@@ -40,10 +47,26 @@ def chercher_adresses_email(url_web_site):
 time.sleep(2)
 
 try:
+    # dismiss notice    
     button_dismiss_notice = WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.ID, "W0wltc"))
     )
     button_dismiss_notice.click()
+
+    # enter text search
+    text_input = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.TAG_NAME, "textarea"))
+    )
+    text_input.send_keys(text_search)
+    text_input.send_keys(Keys.RETURN)
+
+    # click on places
+    button_places = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.LINK_TEXT, "Lieux"))
+    )
+    button_places.click()
+
+
     for i in range(5):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(2)
@@ -99,12 +122,8 @@ try:
 
 
 finally:
-    search_query = url.split("q=")[1].split("&")[0] 
-    content_query = search_query.split("+")
-    name_concat = ""
-    for n in content_query:
-        name_concat += n + "_"
-    name_file = name_concat + "search_google.xlsx"
+    name_concat = text_search.replace(" ", "_")
+    name_file = name_concat.lower() + "_search_google.xlsx"
     df = pd.DataFrame(data)      
     df.to_excel(name_file, index=False) 
     driver.quit()

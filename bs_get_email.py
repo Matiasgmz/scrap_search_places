@@ -13,7 +13,7 @@ def chercher_adresses_email(url):
     return adresses_email
 
 # Exemple d'utilisation
-url = 'http://somme.franceolympique.com/'
+url = input("Entrez l'URL du site web: ")
 adresses_email = chercher_adresses_email(url)
 for adresse_email in adresses_email:
     print(adresse_email)

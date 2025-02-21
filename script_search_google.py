@@ -19,7 +19,9 @@ data = []
 url = "https://www.google.com"
 chrome_options = Options()
 
-chrome_options.add_argument("--incognito")
+# chrome_options.add_argument("--incognito")
+chrome_options.add_argument("--disable-search-engine-choice-screen")
+
 
 driver = webdriver.Chrome(options=chrome_options)
 
@@ -68,7 +70,7 @@ try:
 
 
     for i in range(5):
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        driver.execute_script('const divs = document.querySelectorAll("h1"); const targetDiv = Array.from(divs).find(div => div.textContent.includes("Résultats")); const elementScroll = targetDiv.parentElement.parentElement.parentElement.parentElement; elementScroll.scrollTop = elementScroll.scrollHeight;')
         time.sleep(2)
 
     while True:

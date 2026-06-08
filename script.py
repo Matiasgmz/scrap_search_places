@@ -10,68 +10,138 @@ import pandas as pd
 import re
 import requests
 import urllib3
+from colorama import Fore, init
+
+init(autoreset=True)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-text_search = input("Entrez votre recherche: ")
 
-data = []
-url = "https://maps.google.com/"
-chrome_options = Options()
-
-# chrome_options.add_argument("--incognito")
-chrome_options.add_argument("--disable-search-engine-choice-screen")
+def separator():
+    print(Fore.BLUE + "=" * 100)
 
 
-driver = webdriver.Chrome(options=chrome_options)
+def log_info(message):
+    print(Fore.CYAN + f"[INFO] {message}")
 
-driver.get(
-    url
-)
+
+def log_success(message):
+    print(Fore.GREEN + f"[OK] {message}")
+
+
+def log_warning(message):
+    print(Fore.YELLOW + f"[ATTENTION] {message}")
+
+
+def log_error(message):
+    print(Fore.RED + f"[ERREUR] {message}")
+
+
+def afficher_resultat(index, total, nom, site_web, emails, infos):
+    separator()
+
+    print(Fore.MAGENTA + f" RESULTAT {index}/{total} ".center(100, "#"))
+
+    print(Fore.WHITE + f"🏢 Nom       : {nom}")
+
+    if site_web:
+        print(Fore.CYAN + f"🌐 Site Web  : {site_web}")
+    else:
+        print(Fore.YELLOW + "🌐 Site Web  : Non trouvé")
+
+    if emails:
+        print(Fore.GREEN + f"📧 Emails    : {', '.join(emails)}")
+    else:
+        print(Fore.YELLOW + "📧 Emails    : Aucun trouvé")
+
+    print(Fore.WHITE + f"📋 Infos     : {infos}")
+    separator()
+
+
 def chercher_adresses_email(url_web_site):
-    # Récupérer les addresses email
     contenu = ""
 
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        "User-Agent": "Mozilla/5.0"
     }
-    
-    response = requests.get(url_web_site, headers=headers, verify=False)
-    if response.status_code == 200:
+
+    try:
+        response = requests.get(
+            url_web_site,
+            headers=headers,
+            verify=False,
+            timeout=10
+        )
+
+        response.raise_for_status()
         contenu = response.text
-         
-    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    adresses_email = re.findall(pattern, contenu)
-  
-    if not adresses_email: adresses_email = ""
-    return adresses_email
+
+    except requests.exceptions.RequestException as e:
+        log_error(f"Impossible d'accéder à : {url_web_site}")
+        log_error(str(e))
+        return []
+
+    pattern = r'\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b'
+    emails = list(set(re.findall(pattern, contenu)))
+
+    if emails:
+        log_success(f"{len(emails)} email(s) trouvé(s)")
+
+    return emails
+
+
+text_search = input("Entrez votre recherche : ")
+
+separator()
+log_info("Lancement du scraping Google Maps")
+log_info(f"Recherche : {text_search}")
+separator()
+
+data = []
+
+url = "https://maps.google.com/"
+
+chrome_options = Options()
+chrome_options.add_argument("--disable-search-engine-choice-screen")
+
+driver = webdriver.Chrome(options=chrome_options)
+
+driver.get(url)
 
 time.sleep(2)
+
 try:
 
-    # dismiss notice    
-    button_dismiss_notice = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//*[@id="yDmH0d"]/c-wiz/div/div/div/div[2]/div[1]/div[3]/div[1]/div[1]/form[1]/div/div/button/span[6]'))
-    )
-    button_dismiss_notice.click()
+    try:
+        button_dismiss_notice = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (
+                    By.XPATH,
+                    '//*[@id="yDmH0d"]/c-wiz/div/div/div/div[2]/div[1]/div[3]/div[1]/div[1]/form[1]/div/div/button/span[6]'
+                )
+            )
+        )
+        button_dismiss_notice.click()
+        log_success("Fenêtre de consentement fermée")
+    except Exception:
+        log_warning("Fenêtre de consentement non trouvée")
 
-        # enter text search
     text_input = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//*[@id="searchboxinput"]'))
+        EC.presence_of_element_located((By.XPATH, '//*[@id="ucc-1"]'))
     )
+
     text_input.send_keys(text_search)
     text_input.send_keys(Keys.RETURN)
 
+    log_info("Recherche lancée...")
 
-    time.sleep(2)
- 
-    driver.execute_script('const divs = document.querySelectorAll("h1"); const targetDiv = Array.from(divs).find(div => div.textContent.includes("Résultats")); const elementScroll = targetDiv.parentElement.parentElement.parentElement.parentElement; elementScroll.scrollTop = elementScroll.scrollHeight;')
+    time.sleep(5)
 
-    last_height = 0  # Stocke la hauteur précédente
+    last_height = 0
 
     while True:
-        # Exécuter le script JavaScript pour trouver et faire défiler l'élément
-        height = driver.execute_script('''
+
+        height = driver.execute_script("""
             const divs = document.querySelectorAll("h1");
             const targetDiv = Array.from(divs).find(div => div.textContent.includes("Résultats"));
             if (targetDiv) {
@@ -80,75 +150,93 @@ try:
                 return elementScroll.scrollHeight;
             }
             return 0;
-        ''')
+        """)
 
-        # Si la hauteur de la page ne change plus, arrêter la boucle
         if height == last_height:
-            print("Plus de nouveaux résultats à charger.")
+            log_success("Tous les résultats semblent chargés")
             break
-        
-        last_height = height  # Mettre à jour la dernière hauteur
-        time.sleep(2)  # Pause pour laisser le temps aux résultats de charger
 
+        last_height = height
+        time.sleep(2)
 
-    table_content_data = WebDriverWait(driver, 10).until(
-        EC.presence_of_all_elements_located((By.XPATH, "//*[@id=\"QA0Szd\"]/div/div/div[1]/div[2]/div/div[1]/div/div/div[1]/div[1]/div"))
+    results = driver.find_elements(
+        By.CSS_SELECTOR,
+        'div[role="article"]'
     )
-    print (table_content_data)
-    
 
-    for content in table_content_data:
-        # div_ancestor = content.find_element(By.XPATH, "ancestor::div[7]")
+    log_success(f"{len(results)} résultats détectés")
 
-        # try:
-        #     link_website = content.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
-        #     # if link_website.startswith("https://www.google.com"): 
-        #     #     link_website = ""
-        #     #     adresses_email = ""
-        #     # else:
-        #     #     adresses_email = chercher_adresses_email(link_website)
-        # except NoSuchElementException:
-        #     link_website = ""
-        #     adresses_email = ""
-        # print(link_website)
-        
-        try: 
-            name = content.find_element(By.CSS_SELECTOR, ".fontHeadlineSmall").text
+    for index, content in enumerate(results, start=1):
+
+        log_info(f"Analyse du résultat {index}/{len(results)}")
+
+        name = ""
+        link_website = ""
+        adresses_email = []
+        content_info_element = ""
+
+        try:
+            name = content.find_element(
+                By.CSS_SELECTOR,
+                ".fontHeadlineSmall"
+            ).text
         except NoSuchElementException:
-            name = ""    
-        print(name)
+            pass
 
-        try: 
-           link_website = content.find_element(By.CSS_SELECTOR, '[data-value="Site Web"]').get_attribute("href")
-           adresses_email = chercher_adresses_email(link_website)
+        try:
+            link_website = content.find_element(
+                By.CSS_SELECTOR,
+                '[data-value="Site Web"]'
+            ).get_attribute("href")
+
+            if link_website:
+                adresses_email = chercher_adresses_email(link_website)
 
         except NoSuchElementException:
-            link_website = ""
-            adresses_email = ""
-        # print(link_website)
-        # try:
-        #     content_info_element = content.find_element(
-        #         By.CSS_SELECTOR, "div:nth-child(3)"
-        #     ).text
-        #     print(name, content_info_element, link_website)
+            pass
 
-        # except NoSuchElementException:
-        #     pass
-        if name != "":
-            data.append(
-                {
-                    "Nom": name,
-                    # "Info": content_info_element,
-                    "Site Web": link_website,
-                    "adresses_email": adresses_email
-                }
-            )
+        try:
+            content_info_element = content.find_element(
+                By.CSS_SELECTOR,
+                "div:nth-child(3)"
+            ).text
+        except NoSuchElementException:
+            pass
 
+        afficher_resultat(
+            index=index,
+            total=len(results),
+            nom=name,
+            site_web=link_website,
+            emails=adresses_email,
+            infos=content_info_element
+        )
+
+        if name:
+
+            data.append({
+                "Nom": name,
+                "Info": content_info_element,
+                "Site Web": link_website,
+                "adresses_email": ", ".join(adresses_email)
+            })
 
 finally:
+
+    separator()
+    log_info("Création du fichier Excel...")
+
     name_concat = text_search.replace(" ", "_")
     name_file = name_concat.lower() + "_search_google.xlsx"
-    df = pd.DataFrame(data)      
-    df.to_excel(name_file, index=False) 
+
+    df = pd.DataFrame(data)
+    df.to_excel(name_file, index=False)
+
+    log_success(f"Fichier créé : {name_file}")
+    log_success(f"{len(data)} entreprises sauvegardées")
+
+    separator()
+
     driver.quit()
 
+    input("\\nAppuyez sur Entrée pour fermer...")

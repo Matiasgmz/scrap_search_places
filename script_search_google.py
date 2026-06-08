@@ -87,8 +87,14 @@ try:
             break
 
     table_content_data = WebDriverWait(driver, 10).until(
-        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".rllt__details"))
+        EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div[role='article']"))
     )
+    results = driver.find_elements(
+        By.CSS_SELECTOR,
+        'div[role="article"]'
+    )
+
+    print(len(results))
 
     for content in table_content_data:
         div_ancestor = content.find_element(By.XPATH, "ancestor::div[7]")

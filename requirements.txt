@@ -1,0 +1,13 @@
+selenium
+pandas
+requests
+sqlalchemy
+streamlit
+colorama
+openpyxl
+questionary
+beautifulsoup4
+lxml
+plotly
+
+fake-useragent==2.2.0

@@ -1,318 +1,259 @@
-import sqlite3
-import json
-import requests
 from selenium import webdriver
+import time
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import time
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import NoSuchElementException
+import pandas as pd
 import re
-import threading
-from bs_get_email import process_all_leads_sync
+import requests
+import urllib3
+from colorama import Fore, init
 
-DB_PATH = "leads_v2.db"
+init(autoreset=True)
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    cursor = conn.cursor()
-    cursor.execute('PRAGMA journal_mode=WAL;')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS leads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            place_id TEXT UNIQUE,
-            opportunite TEXT,
-            nom TEXT,
-            pays TEXT,
-            region TEXT,
-            domaine TEXT,
-            adresse TEXT,
-            site_web TEXT,
-            note REAL,
-            nombre_avis INTEGER,
-            dirigeant TEXT,
-            email TEXT,
-            telephone TEXT,
-            statut TEXT DEFAULT 'À contacter',
-            audit_site TEXT
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS doublons (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            place_id TEXT,
-            nom TEXT,
-            pays TEXT,
-            region TEXT,
-            domaine TEXT,
-            telephone TEXT,
-            date_tentative TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS scraping_state (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pays TEXT,
-            region TEXT,
-            domaine TEXT,
-            UNIQUE(pays, region, domaine)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def clear_database():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM leads')
-    cursor.execute('DELETE FROM scraping_state')
-    cursor.execute('DELETE FROM doublons')
-    conn.commit()
-    conn.close()
-    init_db()
 
-def validate_lead_data(data):
-    if not data.get("place_id"): return None
-    
-    email = data.get("email", "")
-    if email and not re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email):
-        data["email"] = ""
-        
-    phone = data.get("telephone", "")
-    if phone:
-        clean_phone = re.sub(r'\D', '', phone)
-        if clean_phone.startswith('33') and len(clean_phone) == 11:
-            clean_phone = '0' + clean_phone[2:]
-        if len(clean_phone) != 10:
-            clean_phone = ""
-        data["telephone"] = clean_phone
-        
-    return data
+def separator():
+    print(Fore.BLUE + "=" * 100)
 
-def fire_webhook_async(url, payload):
-    try: requests.post(url, json=payload, timeout=5)
-    except: pass
 
-def save_lead(data, webhook_url=None):
-    valid_data = validate_lead_data(data)
-    if not valid_data: return False
-    
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    cursor = conn.cursor()
+def log_info(message):
+    print(Fore.CYAN + f"[INFO] {message}")
+
+
+def log_success(message):
+    print(Fore.GREEN + f"[OK] {message}")
+
+
+def log_warning(message):
+    print(Fore.YELLOW + f"[ATTENTION] {message}")
+
+
+def log_error(message):
+    print(Fore.RED + f"[ERREUR] {message}")
+
+
+def afficher_resultat(index, total, nom, site_web, emails, infos, telephone):
+    separator()
+
+    print(Fore.MAGENTA + f" RESULTAT {index}/{total} ".center(100, "#"))
+
+    print(Fore.WHITE + f"🏢 Nom       : {nom}")
+
+    if site_web:
+        print(Fore.CYAN + f"🌐 Site Web  : {site_web}")
+    else:
+        print(Fore.YELLOW + "🌐 Site Web  : Non trouvé")
+
+    if emails:
+        print(Fore.GREEN + f"📧 Emails    : {', '.join(emails)}")
+    else:
+        print(Fore.YELLOW + "📧 Emails    : Aucun trouvé")
+
+    if telephone:
+        print(Fore.BLUE + f"📞 Téléphone : {telephone}")
+    else:
+        print(Fore.YELLOW + "📞 Téléphone : Non trouvé")
+
+    print(Fore.WHITE + f"📋 Infos     : {infos}")
+    separator()
+
+
+def chercher_adresses_email(url_web_site):
+    contenu = ""
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
     try:
-        cursor.execute('''
-            INSERT INTO leads (place_id, opportunite, nom, pays, region, domaine, adresse, site_web, note, nombre_avis, dirigeant, email, telephone, audit_site)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            valid_data.get("place_id"), valid_data.get("opportunite"), valid_data.get("nom"), valid_data.get("pays"), valid_data.get("region"), valid_data.get("domaine"),
-            valid_data.get("adresse"), valid_data.get("site_web"), valid_data.get("note"), valid_data.get("nombre_avis"),
-            valid_data.get("dirigeant"), valid_data.get("email"), valid_data.get("telephone"), valid_data.get("audit_site")
-        ))
-        conn.commit()
-        
-        # Webhook asynchrone non-bloquant pour les leads à haute valeur
-        if webhook_url and valid_data.get("opportunite"):
-            threading.Thread(target=fire_webhook_async, args=(webhook_url, valid_data), daemon=True).start()
-            
-        return True
-    except sqlite3.IntegrityError:
+        response = requests.get(
+            url_web_site,
+            headers=headers,
+            verify=False,
+            timeout=10
+        )
+
+        response.raise_for_status()
+        contenu = response.text
+
+    except requests.exceptions.RequestException as e:
+        log_error(f"Impossible d'accéder à : {url_web_site}")
+        log_error(str(e))
+        return []
+
+    pattern = r'\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b'
+    emails = list(set(re.findall(pattern, contenu)))
+
+    if emails:
+        log_success(f"{len(emails)} email(s) trouvé(s)")
+
+    return emails
+
+def find_phone_number(text):
+    pattern = r'(\+33\s?|0)[1-9](\s?\d{2}){4}'
+    match = re.search(pattern, text)
+
+    if match:
+        return match.group(0)
+    return None
+
+text_search = input("Entrez votre recherche : ")
+
+for departement in range(1, 96):
+   
+    separator()
+    log_info("Lancement du scraping Google Maps")
+    log_info(f"Recherche : {text_search}")
+    separator()
+
+    data = []
+
+    url = "https://maps.google.com/"
+
+    chrome_options = Options()
+    chrome_options.add_argument("--disable-search-engine-choice-screen")
+
+    driver = webdriver.Chrome(options=chrome_options)
+
+    driver.get(url)
+
+    time.sleep(2)
+
+    try:
+
         try:
-            cursor.execute('INSERT INTO doublons (place_id, nom, pays, region, domaine, telephone) VALUES (?, ?, ?, ?, ?, ?)', 
-                           (valid_data.get("place_id"), valid_data.get("nom"), valid_data.get("pays"), valid_data.get("region"), valid_data.get("domaine"), valid_data.get("telephone")))
-            conn.commit()
-        except: pass
-        return False
-    finally:
-        conn.close()
-
-def get_all_leads():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM leads ORDER BY id DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-def get_all_doublons():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    try:
-        cursor.execute('SELECT nom, region, domaine, date_tentative FROM doublons ORDER BY id DESC')
-        rows = cursor.fetchall()
-    except:
-        rows = []
-    conn.close()
-    return [dict(row) for row in rows]
-
-def save_checkpoint(pays, region, domaine):
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    cursor = conn.cursor()
-    try:
-        cursor.execute('''
-            INSERT OR IGNORE INTO scraping_state (pays, region, domaine) 
-            VALUES (?, ?, ?)
-        ''', (pays, region, domaine))
-        conn.commit()
-    except Exception: pass
-    finally: conn.close()
-
-def get_checkpoints(pays):
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        cursor = conn.cursor()
-        cursor.execute('SELECT region, domaine FROM scraping_state WHERE pays = ?', (pays,))
-        results = cursor.fetchall()
-        conn.close()
-        return set(results)
-    except sqlite3.OperationalError:
-        return set()
-
-def update_lead_status(lead_id, new_status):
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    cursor = conn.cursor()
-    cursor.execute('UPDATE leads SET statut = ? WHERE id = ?', (new_status, lead_id))
-    conn.commit()
-    conn.close()
-
-class GoogleMapsScraper:
-    def __init__(self, headless=True):
-        chrome_options = Options()
-        if headless: chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        
-        # V33: Bandwidth Tuning - Désactivation des médias inutiles mais préservation du CSS pour le layout
-        prefs = {
-            "profile.managed_default_content_settings.images": 2,
-            "profile.managed_default_content_settings.plugins": 2,
-            "profile.managed_default_content_settings.geolocation": 2,
-            "profile.managed_default_content_settings.media_stream": 2
-        }
-        chrome_options.add_experimental_option("prefs", prefs)
-        
-        # Header réaliste d'un navigateur standard moderne (Chrome)
-        chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        chrome_options.add_argument("accept-language=fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7")
-        
-        self.driver = webdriver.Chrome(options=chrome_options)
-
-    def scrape(self, country, region, domain, max_scrolls=15, focus_no_website=False, webhook_url=None, js_rendering=False, callback=None):
-        search_query = f"{domain}, {region}, {country}"
-        url = f"https://www.google.com/maps/search/{search_query.replace(' ', '+')}"
-        
-        if callback: callback({"status": "info", "message": f"Recherche de '{search_query}' sur Google Maps..."})
-        try: self.driver.get(url)
-        except Exception as e: raise Exception(f"Erreur d'accès réseau à Google Maps: {e}")
-
-        # Automation avancée : Attente dynamique du DOM
-        try:
-            accept_button = WebDriverWait(self.driver, 5).until(
-                EC.presence_of_element_located((By.XPATH, "//button[.//span[text()='Tout accepter']] | //button[.//span[text()='Accept all']]"))
+            button_dismiss_notice = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located(
+                    (
+                        By.XPATH,
+                        '//*[@id="yDmH0d"]/c-wiz/div/div/div/div[2]/div[1]/div[3]/div[1]/div[1]/form[1]/div/div/button/span[6]'
+                    )
+                )
             )
-            accept_button.click()
-        except: pass
+            button_dismiss_notice.click()
+            log_success("Fenêtre de consentement fermée")
+        except Exception:
+            log_warning("Fenêtre de consentement non trouvée")
 
-        results = []
-        try:
-            # Automation avancée : Infinite Scroll via interception XHR
-            scrollable_div = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//div[contains(@aria-label, 'Résultats pour')] | //div[contains(@role, 'feed')]"))
-            )
-            last_count = 0
-            for i in range(max_scrolls):
-                if callback: callback({"status": "info", "message": f"Défilement de la carte en cours (Étape {i+1}/{max_scrolls})..."})
-                self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
-                time.sleep(0.8) # Délai optimisé pour le trigger XHR de Gmaps (Vitesse Max)
-                results = self.driver.find_elements(By.CSS_SELECTOR, "div.Nv2PK")
-                if len(results) == last_count:
-                    break
-                last_count = len(results)
-                if len(results) >= 120: break
-        except Exception as e:
-            if callback: callback({"status": "error", "message": f"Délai d'attente XHR expiré : {e}"})
-            
-        if not results:
-            results = self.driver.find_elements(By.CSS_SELECTOR, "a.hfpxzc")
-            
-        extracted_data = []
-        total_results = len(results)
-        
-        if callback: callback({"status": "info", "message": f"Fin de l'extraction Google Maps. {total_results} entreprises trouvées. Lancement des requêtes OSINT..."})
-        
-        # Extraction structurelle Hybride Google Maps
-        raw_leads = []
+        text_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, '//*[@id="ucc-1"]'))
+        )
+
+        text_input.send_keys(text_search + f" {departement:02d}")
+        text_input.send_keys(Keys.RETURN)
+
+        log_info("Recherche lancée...")
+
+        time.sleep(5)
+
+        last_height = 0
+
+        while True:
+
+            height = driver.execute_script("""
+                const divs = document.querySelectorAll("h1");
+                const targetDiv = Array.from(divs).find(div => div.textContent.includes("Résultats"));
+                if (targetDiv) {
+                    const elementScroll = targetDiv.parentElement.parentElement.parentElement.parentElement;
+                    elementScroll.scrollTop = elementScroll.scrollHeight;
+                    return elementScroll.scrollHeight;
+                }
+                return 0;
+            """)
+
+            if height == last_height:
+                log_success("Tous les résultats semblent chargés")
+                break
+
+            last_height = height
+            time.sleep(2)
+
+        results = driver.find_elements(
+            By.CSS_SELECTOR,
+            'div[role="article"]'
+        )
+
+        log_success(f"{len(results)} résultats détectés")
+
         for index, content in enumerate(results, start=1):
+
+            log_info(f"Analyse du résultat {index}/{len(results)}")
+
+            name = ""
+            link_website = ""
+            adresses_email = []
+            content_info_element = ""
+            phone_number = ""
+
             try:
-                name, link_website, place_id, adresse = "", "", "", ""
-                note, nombre_avis = None, None
-                
-                try: name = content.find_element(By.CSS_SELECTOR, ".fontHeadlineSmall").text
-                except: pass
-                if not name:
-                    try: name = (content.find_element(By.CSS_SELECTOR, 'a.hfpxzc') if content.tag_name != 'a' else content).get_attribute("aria-label")
-                    except: pass
-                if not name:
-                    try: name = content.find_element(By.CSS_SELECTOR, "div.qBF1Pd").text
-                    except: pass
-                        
-                if not name:
-                    if callback: callback({"status": "ignored", "index": index, "total": total_results, "name": f"Lead {index}", "reason": "Nom introuvable"})
-                    continue
+                name = content.find_element(
+                    By.CSS_SELECTOR,
+                    ".fontHeadlineSmall"
+                ).text
+            except NoSuchElementException:
+                pass
 
-                try: place_id = content.get_attribute("href") if content.tag_name == 'a' else content.find_element(By.CSS_SELECTOR, 'a').get_attribute("href")
-                except: place_id = name
+            try:
+                link_website = content.find_element(
+                    By.CSS_SELECTOR,
+                    '[data-value="Site Web"]'
+                ).get_attribute("href")
 
-                try: link_website = content.find_element(By.CSS_SELECTOR, '[data-value="Site Web"]').get_attribute("href")
-                except: pass
+                if link_website:
+                    adresses_email = chercher_adresses_email(link_website)
 
-                text_content = content.text
-                try:
-                    note_match = re.search(r'([\d,.]+)\s*\(\s*(\d+)\s*\)', text_content)
-                    if note_match:
-                        note = float(note_match.group(1).replace(',', '.'))
-                        nombre_avis = int(note_match.group(2))
+            except NoSuchElementException:
+                pass
 
-                    lines = [line.strip() for line in text_content.split('\n') if line.strip()]
-                    for line in lines:
-                        if "·" in line and not "Ouvert" in line and not "Fermé" in line:
-                            parts = line.split("·")
-                            if len(parts) > 1: adresse = parts[-1].strip()
-                except: pass
+            try:
+                content_info_element = content.find_element(
+                    By.CSS_SELECTOR,
+                    "div:nth-child(3)"
+                ).text
+                if content_info_element:
+                    phone_number = find_phone_number(content_info_element)
+            except NoSuchElementException:
+                pass
 
-                gm_phones = re.findall(r'(?:(?:\+|00)33|0)[1-9](?:[\s.-]?\d{2}){4}', text_content)
-                
-                raw_leads.append({
-                    "index": index, "name": name, "place_id": place_id, "link_website": link_website,
-                    "adresse": adresse, "note": note, "nombre_avis": nombre_avis, "gm_phones": gm_phones,
-                    "country": country, "region": region, "domain": domain
+            afficher_resultat(
+                index=index,
+                total=len(results),
+                nom=name,
+                site_web=link_website,
+                emails=adresses_email,
+                telephone=phone_number,
+                infos=content_info_element
+            )
+
+            if name:
+
+                data.append({
+                    "Nom": name,
+                    "Info": content_info_element,
+                    "Site Web": link_website,
+                    "adresses_email": ", ".join(adresses_email),
+                    "Téléphone": phone_number
                 })
-            except Exception: pass
-                
-        self.close()
 
-        def osint_callback(res):
-            if res["status"] == "ignored":
-                if callback: callback({"status": "ignored", "current": res["index"], "total": total_results, "name": res["name"], "reason": res["reason"]})
-            elif res["status"] == "success":
-                lead = res["data"]
-                extracted_data.append(lead)
-                is_new = save_lead(lead, webhook_url=webhook_url)
-                if callback: callback({"status": "progress", "current": res["index"], "total": total_results, "data": lead, "is_new": is_new})
-                
-        if raw_leads:
-            # Passe le flag js_rendering au pipeline asynchrone OSINT Enterprise
-            process_all_leads_sync(raw_leads, focus_no_website, js_rendering=js_rendering, callback=osint_callback)
+    finally:
 
-        return extracted_data
+        separator()
+        log_info("Création du fichier Excel...")
 
-    def close(self):
-        try: self.driver.quit()
-        except: pass
+        name_concat = text_search.replace(" ", "_")
+        name_file = name_concat.lower() + f"_{departement:02d}_search_google.xlsx"
+
+        df = pd.DataFrame(data)
+        df.to_excel(name_file, index=False)
+
+        log_success(f"Fichier créé : {name_file}")
+        log_success(f"{len(data)} entreprises sauvegardées")
+
+        separator()
+
+        driver.quit()
